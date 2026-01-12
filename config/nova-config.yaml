@@ -1,0 +1,83 @@
+# NOVA Claude Code Protector Configuration
+# =========================================
+#
+# Three-tier detection: Keywords + Semantics + LLM
+# Adjust settings based on your needs and API availability.
+
+# =============================================================================
+# LLM PROVIDER CONFIGURATION
+# =============================================================================
+
+# LLM Provider for Tier 3 detection
+# Options: anthropic, openai, ollama, groq, azure
+llm_provider: anthropic
+
+# Model to use for LLM-based detection
+# Anthropic: claude-3-5-haiku-20241022 (fast/cheap), claude-sonnet-4-20250514 (balanced)
+# OpenAI: gpt-4o-mini (fast/cheap), gpt-4o (balanced)
+# Ollama: llama3, mistral, etc. (local, no API key needed)
+model: claude-3-5-haiku-20241022
+
+# =============================================================================
+# DETECTION TIER TOGGLES
+# =============================================================================
+
+# Enable/disable each detection tier independently
+# Disable LLM tier for faster scanning (keywords + semantics only)
+enable_keywords: true    # Tier 1: Fast regex-based detection (~1ms)
+enable_semantics: true   # Tier 2: ML-based semantic similarity (~50ms)
+enable_llm: true         # Tier 3: LLM-powered analysis (~500-2000ms)
+
+# =============================================================================
+# THRESHOLD CONFIGURATION
+# =============================================================================
+
+# Similarity/confidence thresholds (0.0 - 1.0)
+# Higher = more strict (fewer false positives, may miss some attacks)
+# Lower = more sensitive (catches more attacks, may have false positives)
+semantic_threshold: 0.7   # For semantic similarity matching
+llm_threshold: 0.7        # For LLM confidence scoring
+
+# =============================================================================
+# PERFORMANCE SETTINGS
+# =============================================================================
+
+# Timeout for LLM API calls in seconds
+# Increase if using slower models or experiencing timeouts
+llm_timeout: 10
+
+# Maximum content length to scan (characters)
+# Longer content will be truncated to this length
+max_content_length: 50000
+
+# =============================================================================
+# SEVERITY FILTERING
+# =============================================================================
+
+# Only warn on detections at or above this severity level
+# Options: low, medium, high
+# Set to "high" for minimal warnings (only definite attacks)
+# Set to "low" for maximum sensitivity (all detections)
+min_severity: low
+
+# =============================================================================
+# RULES CONFIGURATION
+# =============================================================================
+
+# Which rule files to load (relative to rules/ directory)
+# Comment out rules you don't need to improve performance
+rule_files:
+  - instruction_override.nov
+  - roleplay_jailbreak.nov
+  - encoding_obfuscation.nov
+  - context_manipulation.nov
+
+# =============================================================================
+# DEBUG SETTINGS
+# =============================================================================
+
+# Enable verbose logging (useful for troubleshooting)
+debug: false
+
+# Log file location (empty = no file logging)
+log_file: ""
