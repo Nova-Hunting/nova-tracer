@@ -161,8 +161,13 @@ NOVA_HOOKS=$(cat <<EOF
   "hooks": {
     "SessionStart": [
       {
-        "type": "command",
-        "command": "uv run $NOVA_DIR/hooks/session-start.py"
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run $NOVA_DIR/hooks/session-start.py"
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -278,8 +283,13 @@ NOVA_HOOKS=$(cat <<EOF
     ],
     "SessionEnd": [
       {
-        "type": "command",
-        "command": "uv run $NOVA_DIR/hooks/session-end.py"
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run $NOVA_DIR/hooks/session-end.py"
+          }
+        ]
       }
     ]
   }
