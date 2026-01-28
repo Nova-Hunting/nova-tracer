@@ -334,7 +334,7 @@ def log_event(event_data: Dict[str, Any], message: Optional[str] = None) -> None
     event_data["session_id"] = session_id
     if message:
         event_data["message"] = message
-    event_data["host"] = os.environ.get("HOSTNAME", "unknown")
+    event_data["host"] = platform.node()
     event_data["service"] = "nova-protector"
     event_data["platform"] = platform.system().lower()
     event_data["project_dir"] = os.environ.get("CLAUDE_PROJECT_DIR", "unknown")
