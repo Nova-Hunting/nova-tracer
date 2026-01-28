@@ -20,7 +20,13 @@ JSON output for blocks:
 import json
 import re
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+lib_dir = Path(__file__).parent / "lib"
+sys.path.insert(0, str(lib_dir))
+
+from nova_logging import log_event
 
 # Dangerous command patterns to block
 DANGEROUS_PATTERNS: List[Tuple[str, str]] = [
@@ -131,11 +137,20 @@ def main() -> None:
             "reason": f"[NOVA] Blocked: {block_reason}"
         }
         print(json.dumps(output))
+        input_data["execution"] = {
+            "verdict": "block",
+            "reason": f"[NOVA] Blocked: {block_reason}"
+        }
+        log_event(input_data, "Tool blocked")
         sys.exit(2)
 
+    input_data["execution"] = {
+        "verdict": "allow",
+        "reason": f"[NOVA] Allowed"
+    }
+    log_event(input_data, "Tool allowed")
     # Allow the operation
     sys.exit(0)
-
 
 if __name__ == "__main__":
     main()
