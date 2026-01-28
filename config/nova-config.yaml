@@ -86,5 +86,18 @@ log_file: ""
 logging:
   handlers:
     - file
+    - datadog
   file:
     output_dir: ""
+  datadog:
+    api_key: ${DD_API_KEY}
+    site: datadoghq.com
+    service: nova-protector
+    source: claude-code-hooks
+    tags:
+      - env:staging
+      - project:nova-protector
+      - version:1.0.0
+      - team:cti
+      - service:nova-protector
+      - source:claude-code-hooks
