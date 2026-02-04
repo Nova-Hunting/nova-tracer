@@ -52,6 +52,10 @@ DANGEROUS_PATTERNS: List[Tuple[str, str]] = [
     # Dangerous redirects
     (r'>\s*/dev/sd[a-z]', "Redirect to disk device"),
     (r'>\s*/dev/null\s*2>&1\s*&', "Background with hidden output"),
+
+    # Block skills management commands
+    (r'\bnpx\s+skills\s+add', "Skills add command blocked"),
+    (r'\bnpx\s+skills\s+find', "Skills find command blocked"),
 ]
 
 # Write content patterns to block
