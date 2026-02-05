@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.9"
-# dependencies = []
+# dependencies = ["pyyaml"]
 # ///
 """
 Nova-tracer - PreToolUse Hook (Fast Blocking)
@@ -10,11 +10,15 @@ Agent Monitoring and Visibility
 Fast pre-execution check that blocks dangerous commands BEFORE execution.
 Uses simple pattern matching for speed - full NOVA scanning happens in PostToolUse.
 
-Supports configurable compliance rules via JSON config files.
-Config search order:
-  1. $CLAUDE_PROJECT_DIR/.nova-tracer/pre-tool-rules.json (project override)
-  2. {nova_dir}/config/pre-tool-rules.json (installation config)
-  3. Default hardcoded patterns (always available)
+Supports configurable compliance rules via nova-config.yaml.
+Config location: {nova_dir}/config/nova-config.yaml
+
+Configurable sections in nova-config.yaml:
+  - dangerous_patterns: Additional bash command patterns to block
+  - protected_files: Additional file paths to protect
+  - dangerous_content_patterns: Additional content patterns to block
+
+Each pattern supports an optional 'enabled' field (default: true).
 
 Exit codes:
   0 = Allow tool execution
@@ -25,11 +29,59 @@ JSON output for blocks:
 """
 
 import json
-import os
 import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
+
+
+def load_config() -> Dict[str, Any]:
+    """Load the nova-config.yaml configuration file.
+
+    Returns an empty dict if the config cannot be loaded.
+    """
+    # Determine config path relative to this script
+    script_dir = Path(__file__).parent.resolve()
+    config_path = script_dir.parent / "config" / "nova-config.yaml"
+
+    if not config_path.exists():
+        return {}
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        # Fail-open: if config is invalid, use defaults only
+        return {}
+
+
+def extend_patterns_from_config(
+    base_patterns: List[Tuple[str, str]],
+    config_key: str,
+    config: Dict[str, Any]
+) -> List[Tuple[str, str]]:
+    """Extend a base pattern list with patterns from config.
+
+    Config patterns should be a list of dicts with 'pattern', 'reason', and optional 'enabled' keys.
+    Patterns with enabled=false are skipped.
+    """
+    extended = list(base_patterns)
+    config_patterns = config.get(config_key, [])
+
+    if not config_patterns:
+        return extended
+
+    for item in config_patterns:
+        if isinstance(item, dict) and "pattern" in item and "reason" in item:
+            # Skip disabled rules (default is enabled=true)
+            if not item.get("enabled", True):
+                continue
+            extended.append((item["pattern"], item["reason"]))
+
+    return extended
+
 
 # Protected file paths - these should not be modified by the agent
 PROTECTED_FILES: List[Tuple[str, str]] = [
@@ -80,168 +132,54 @@ DEFAULT_CONTENT_PATTERNS: List[Tuple[str, str]] = [
     (r"'\s*OR\s+'1'\s*=\s*'1", "SQL injection attempt"),
 ]
 
-
-def _find_config_file() -> Optional[Path]:
-    """Find config file with priority: project > installation.
-
-    Returns the first existing config file path, or None if not found.
-    """
-    # 1. Project-level override
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
-    if project_dir:
-        project_config = Path(project_dir) / ".nova-tracer" / "pre-tool-rules.json"
-        if project_config.exists():
-            return project_config
-
-    # 2. Installation-level config
-    script_dir = Path(__file__).parent
-    install_config = script_dir.parent / "config" / "pre-tool-rules.json"
-    if install_config.exists():
-        return install_config
-
-    return None
+# Load config and extend patterns with custom values from nova-config.yaml
+_config = load_config()
+PROTECTED_FILES = extend_patterns_from_config(PROTECTED_FILES, "protected_files", _config)
+DANGEROUS_PATTERNS = extend_patterns_from_config(DEFAULT_BASH_PATTERNS, "dangerous_patterns", _config)
+DANGEROUS_CONTENT_PATTERNS = extend_patterns_from_config(
+    DEFAULT_CONTENT_PATTERNS, "dangerous_content_patterns", _config
+)
 
 
-def _load_config() -> Dict[str, Any]:
-    """Load config from file, return empty dict on error (fail-open)."""
-    config_path = _find_config_file()
-    if not config_path:
-        return {}
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        # Fail-open: if config is invalid, use defaults only
-        return {}
-
-
-def _get_protected_files(config: Dict[str, Any]) -> List[Tuple[str, str]]:
-    """Return merged protected files (default + config).
-
-    Args:
-        config: Loaded configuration dict
-
-    Returns:
-        List of (pattern, reason) tuples for protected files
-    """
-    protected = list(PROTECTED_FILES)
-
-    # Check if any default rules should be disabled (for testing)
-    disabled_defaults = set(config.get("disable_default_rules", []))
-    if disabled_defaults:
-        protected = [(p, r) for p, r in protected if r not in disabled_defaults]
-
-    # Add custom protected files from config
-    for item in config.get("protected_files", []):
-        if item.get("enabled", True):
-            pattern = item.get("pattern")
-            reason = item.get("reason", "Protected by compliance policy")
-            if pattern:
-                protected.append((pattern, reason))
-
-    return protected
-
-
-def _get_patterns(config: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
-    """Return merged patterns (default + compliance rules).
-
-    Args:
-        config: Loaded configuration dict
-
-    Returns:
-        Tuple of (bash_patterns, content_patterns)
-    """
-    bash_patterns = list(DEFAULT_BASH_PATTERNS)
-    content_patterns = list(DEFAULT_CONTENT_PATTERNS)
-
-    # Check if any default rules should be disabled (for testing)
-    disabled_defaults = set(config.get("disable_default_rules", []))
-    if disabled_defaults:
-        # Filter out disabled default rules by their reason
-        bash_patterns = [(p, r) for p, r in bash_patterns if r not in disabled_defaults]
-        content_patterns = [(p, r) for p, r in content_patterns if r not in disabled_defaults]
-
-    # Add compliance rules
-    compliance = config.get("compliance_rules", {})
-
-    for rule in compliance.get("bash", []):
-        if rule.get("enabled", True):
-            pattern = rule.get("pattern")
-            reason = rule.get("reason", "Blocked by compliance policy")
-            if pattern:
-                bash_patterns.append((pattern, reason))
-
-    for rule in compliance.get("write", []):
-        if rule.get("enabled", True):
-            pattern = rule.get("pattern")
-            reason = rule.get("reason", "Blocked by compliance policy")
-            if pattern:
-                content_patterns.append((pattern, reason))
-
-    return bash_patterns, content_patterns
-
-
-def check_protected_file(file_path: str, protected_files: Optional[List[Tuple[str, str]]] = None) -> Optional[str]:
+def check_protected_file(file_path: str) -> Optional[str]:
     """Check if a file path is protected from modification.
-
-    Args:
-        file_path: The file path to check
-        protected_files: List of (pattern, reason) tuples. If None, uses PROTECTED_FILES.
 
     Returns the reason if protected, None if allowed.
     """
     if not file_path:
         return None
 
-    if protected_files is None:
-        protected_files = PROTECTED_FILES
-
-    for pattern, reason in protected_files:
+    for pattern, reason in PROTECTED_FILES:
         if re.search(pattern, file_path):
             return reason
 
     return None
 
 
-def check_dangerous_command(command: str, patterns: Optional[List[Tuple[str, str]]] = None) -> Optional[str]:
+def check_dangerous_command(command: str) -> Optional[str]:
     """Check if a bash command is dangerous.
-
-    Args:
-        command: The bash command to check
-        patterns: List of (pattern, reason) tuples. If None, uses DEFAULT_BASH_PATTERNS.
 
     Returns the reason if dangerous, None if safe.
     """
     if not command:
         return None
 
-    if patterns is None:
-        patterns = DEFAULT_BASH_PATTERNS
-
-    for pattern, reason in patterns:
+    for pattern, reason in DANGEROUS_PATTERNS:
         if re.search(pattern, command, re.IGNORECASE):
             return reason
 
     return None
 
 
-def check_dangerous_content(content: str, patterns: Optional[List[Tuple[str, str]]] = None) -> Optional[str]:
+def check_dangerous_content(content: str) -> Optional[str]:
     """Check if write content contains dangerous patterns.
-
-    Args:
-        content: The content to check
-        patterns: List of (pattern, reason) tuples. If None, uses DEFAULT_CONTENT_PATTERNS.
 
     Returns the reason if dangerous, None if safe.
     """
     if not content:
         return None
 
-    if patterns is None:
-        patterns = DEFAULT_CONTENT_PATTERNS
-
-    for pattern, reason in patterns:
+    for pattern, reason in DANGEROUS_CONTENT_PATTERNS:
         if re.search(pattern, content, re.IGNORECASE | re.DOTALL):
             return reason
 
@@ -257,11 +195,6 @@ def main() -> None:
         # Invalid input, fail open (allow)
         sys.exit(0)
 
-    # Load config and patterns
-    config = _load_config()
-    bash_patterns, content_patterns = _get_patterns(config)
-    protected_files = _get_protected_files(config)
-
     tool_name = input_data.get("tool_name", "")
     tool_input = input_data.get("tool_input", {})
 
@@ -270,23 +203,23 @@ def main() -> None:
     # Check Bash commands
     if tool_name == "Bash":
         command = tool_input.get("command", "")
-        block_reason = check_dangerous_command(command, bash_patterns)
+        block_reason = check_dangerous_command(command)
 
     # Check Write content and protected files
     elif tool_name == "Write":
         file_path = tool_input.get("file_path", "")
-        block_reason = check_protected_file(file_path, protected_files)
+        block_reason = check_protected_file(file_path)
         if not block_reason:
             content = tool_input.get("content", "")
-            block_reason = check_dangerous_content(content, content_patterns)
+            block_reason = check_dangerous_content(content)
 
     # Check Edit content and protected files
     elif tool_name == "Edit":
         file_path = tool_input.get("file_path", "")
-        block_reason = check_protected_file(file_path, protected_files)
+        block_reason = check_protected_file(file_path)
         if not block_reason:
             new_string = tool_input.get("new_string", "")
-            block_reason = check_dangerous_content(new_string, content_patterns)
+            block_reason = check_dangerous_content(new_string)
 
     if block_reason:
         # Block the operation
