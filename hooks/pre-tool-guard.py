@@ -23,6 +23,11 @@ import re
 import sys
 from typing import List, Optional, Tuple
 
+# Protected file paths - these should not be modified by the agent
+PROTECTED_FILES: List[Tuple[str, str]] = [
+    (r'(^|/)\.claude/settings\.json$', "Claude settings file"),
+]
+
 # Dangerous command patterns to block
 DANGEROUS_PATTERNS: List[Tuple[str, str]] = [
     # Destructive file operations
@@ -47,6 +52,10 @@ DANGEROUS_PATTERNS: List[Tuple[str, str]] = [
     # Dangerous redirects
     (r'>\s*/dev/sd[a-z]', "Redirect to disk device"),
     (r'>\s*/dev/null\s*2>&1\s*&', "Background with hidden output"),
+
+    # Block skills management commands
+    (r'\bnpx\s+skills\s+add', "Skills add command blocked"),
+    (r'\bnpx\s+skills\s+find', "Skills find command blocked"),
 ]
 
 # Write content patterns to block
@@ -62,6 +71,21 @@ DANGEROUS_CONTENT_PATTERNS: List[Tuple[str, str]] = [
     (r"UNION\s+SELECT.*FROM", "SQL injection attempt"),
     (r"'\s*OR\s+'1'\s*=\s*'1", "SQL injection attempt"),
 ]
+
+
+def check_protected_file(file_path: str) -> Optional[str]:
+    """Check if a file path is protected from modification.
+
+    Returns the reason if protected, None if allowed.
+    """
+    if not file_path:
+        return None
+
+    for pattern, reason in PROTECTED_FILES:
+        if re.search(pattern, file_path):
+            return reason
+
+    return None
 
 
 def check_dangerous_command(command: str) -> Optional[str]:
@@ -115,15 +139,21 @@ def main() -> None:
         command = tool_input.get("command", "")
         block_reason = check_dangerous_command(command)
 
-    # Check Write content
+    # Check Write content and protected files
     elif tool_name == "Write":
-        content = tool_input.get("content", "")
-        block_reason = check_dangerous_content(content)
+        file_path = tool_input.get("file_path", "")
+        block_reason = check_protected_file(file_path)
+        if not block_reason:
+            content = tool_input.get("content", "")
+            block_reason = check_dangerous_content(content)
 
-    # Check Edit content
+    # Check Edit content and protected files
     elif tool_name == "Edit":
-        new_string = tool_input.get("new_string", "")
-        block_reason = check_dangerous_content(new_string)
+        file_path = tool_input.get("file_path", "")
+        block_reason = check_protected_file(file_path)
+        if not block_reason:
+            new_string = tool_input.get("new_string", "")
+            block_reason = check_dangerous_content(new_string)
 
     if block_reason:
         # Block the operation
