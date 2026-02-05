@@ -116,16 +116,44 @@ def _load_config() -> Dict[str, Any]:
         return {}
 
 
-def _get_patterns() -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+def _get_protected_files(config: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Return merged protected files (default + config).
+
+    Args:
+        config: Loaded configuration dict
+
+    Returns:
+        List of (pattern, reason) tuples for protected files
+    """
+    protected = list(PROTECTED_FILES)
+
+    # Check if any default rules should be disabled (for testing)
+    disabled_defaults = set(config.get("disable_default_rules", []))
+    if disabled_defaults:
+        protected = [(p, r) for p, r in protected if r not in disabled_defaults]
+
+    # Add custom protected files from config
+    for item in config.get("protected_files", []):
+        if item.get("enabled", True):
+            pattern = item.get("pattern")
+            reason = item.get("reason", "Protected by compliance policy")
+            if pattern:
+                protected.append((pattern, reason))
+
+    return protected
+
+
+def _get_patterns(config: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
     """Return merged patterns (default + compliance rules).
+
+    Args:
+        config: Loaded configuration dict
 
     Returns:
         Tuple of (bash_patterns, content_patterns)
     """
     bash_patterns = list(DEFAULT_BASH_PATTERNS)
     content_patterns = list(DEFAULT_CONTENT_PATTERNS)
-
-    config = _load_config()
 
     # Check if any default rules should be disabled (for testing)
     disabled_defaults = set(config.get("disable_default_rules", []))
@@ -154,15 +182,22 @@ def _get_patterns() -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
     return bash_patterns, content_patterns
 
 
-def check_protected_file(file_path: str) -> Optional[str]:
+def check_protected_file(file_path: str, protected_files: Optional[List[Tuple[str, str]]] = None) -> Optional[str]:
     """Check if a file path is protected from modification.
+
+    Args:
+        file_path: The file path to check
+        protected_files: List of (pattern, reason) tuples. If None, uses PROTECTED_FILES.
 
     Returns the reason if protected, None if allowed.
     """
     if not file_path:
         return None
 
-    for pattern, reason in PROTECTED_FILES:
+    if protected_files is None:
+        protected_files = PROTECTED_FILES
+
+    for pattern, reason in protected_files:
         if re.search(pattern, file_path):
             return reason
 
@@ -222,8 +257,10 @@ def main() -> None:
         # Invalid input, fail open (allow)
         sys.exit(0)
 
-    # Load patterns (default + compliance rules)
-    bash_patterns, content_patterns = _get_patterns()
+    # Load config and patterns
+    config = _load_config()
+    bash_patterns, content_patterns = _get_patterns(config)
+    protected_files = _get_protected_files(config)
 
     tool_name = input_data.get("tool_name", "")
     tool_input = input_data.get("tool_input", {})
@@ -238,7 +275,7 @@ def main() -> None:
     # Check Write content and protected files
     elif tool_name == "Write":
         file_path = tool_input.get("file_path", "")
-        block_reason = check_protected_file(file_path)
+        block_reason = check_protected_file(file_path, protected_files)
         if not block_reason:
             content = tool_input.get("content", "")
             block_reason = check_dangerous_content(content, content_patterns)
@@ -246,7 +283,7 @@ def main() -> None:
     # Check Edit content and protected files
     elif tool_name == "Edit":
         file_path = tool_input.get("file_path", "")
-        block_reason = check_protected_file(file_path)
+        block_reason = check_protected_file(file_path, protected_files)
         if not block_reason:
             new_string = tool_input.get("new_string", "")
             block_reason = check_dangerous_content(new_string, content_patterns)

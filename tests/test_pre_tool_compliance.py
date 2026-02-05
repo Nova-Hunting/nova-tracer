@@ -186,7 +186,8 @@ class TestPatternMerging:
     def test_default_patterns_always_included(self, pre_tool_module):
         """Default security patterns are always included."""
         with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/nonexistent"}):
-            bash_patterns, content_patterns = pre_tool_module._get_patterns()
+            config = pre_tool_module._load_config()
+            bash_patterns, content_patterns = pre_tool_module._get_patterns(config)
 
             # Should have default patterns
             assert len(bash_patterns) > 0
@@ -204,7 +205,8 @@ class TestPatternMerging:
         config_path.write_text(json.dumps(sample_config))
 
         with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": temp_project_dir}):
-            bash_patterns, content_patterns = pre_tool_module._get_patterns()
+            config = pre_tool_module._load_config()
+            bash_patterns, content_patterns = pre_tool_module._get_patterns(config)
 
             reasons = [r for _, r in bash_patterns]
             assert "npx install blocked by compliance policy" in reasons
@@ -239,7 +241,8 @@ class TestPatternMerging:
         config_path.write_text(json.dumps(config))
 
         with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": temp_project_dir}):
-            bash_patterns, _ = pre_tool_module._get_patterns()
+            loaded_config = pre_tool_module._load_config()
+            bash_patterns, _ = pre_tool_module._get_patterns(loaded_config)
             reasons = [r for _, r in bash_patterns]
 
             assert "This rule is disabled" not in reasons
@@ -256,10 +259,78 @@ class TestPatternMerging:
         config_path.write_text(json.dumps(config))
 
         with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": temp_project_dir}):
-            bash_patterns, _ = pre_tool_module._get_patterns()
+            loaded_config = pre_tool_module._load_config()
+            bash_patterns, _ = pre_tool_module._get_patterns(loaded_config)
             reasons = [r for _, r in bash_patterns]
 
             assert "Destructive rm command" not in reasons
+
+
+class TestProtectedFilesMerging:
+    """Tests for _get_protected_files function."""
+
+    def test_default_protected_files_included(self, pre_tool_module):
+        """Default protected files are always included."""
+        config = {}
+        protected = pre_tool_module._get_protected_files(config)
+
+        # Should have at least the default Claude settings protection
+        assert len(protected) > 0
+        reasons = [r for _, r in protected]
+        assert any("claude" in r.lower() or "settings" in r.lower() for r in reasons)
+
+    def test_custom_protected_files_merged(self, pre_tool_module, temp_project_dir):
+        """Custom protected files are merged with defaults."""
+        config = {
+            "version": 1,
+            "protected_files": [
+                {
+                    "id": "env-file",
+                    "pattern": r"(^|/)\.env$",
+                    "reason": "Environment file protected",
+                    "enabled": True,
+                }
+            ],
+        }
+        config_path = Path(temp_project_dir) / ".nova-tracer" / "pre-tool-rules.json"
+        config_path.write_text(json.dumps(config))
+
+        with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": temp_project_dir}):
+            loaded_config = pre_tool_module._load_config()
+            protected = pre_tool_module._get_protected_files(loaded_config)
+
+            reasons = [r for _, r in protected]
+            assert "Environment file protected" in reasons
+
+    def test_disabled_protected_files_excluded(self, pre_tool_module, temp_project_dir):
+        """Protected files with enabled=false are excluded."""
+        config = {
+            "version": 1,
+            "protected_files": [
+                {
+                    "id": "disabled-file",
+                    "pattern": r"disabled\.txt$",
+                    "reason": "This protection is disabled",
+                    "enabled": False,
+                },
+                {
+                    "id": "enabled-file",
+                    "pattern": r"enabled\.txt$",
+                    "reason": "This protection is enabled",
+                    "enabled": True,
+                },
+            ],
+        }
+        config_path = Path(temp_project_dir) / ".nova-tracer" / "pre-tool-rules.json"
+        config_path.write_text(json.dumps(config))
+
+        with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": temp_project_dir}):
+            loaded_config = pre_tool_module._load_config()
+            protected = pre_tool_module._get_protected_files(loaded_config)
+            reasons = [r for _, r in protected]
+
+            assert "This protection is disabled" not in reasons
+            assert "This protection is enabled" in reasons
 
 
 # ============================================================================
@@ -411,6 +482,85 @@ class TestComplianceBlocking:
         )
 
         assert result.returncode == 2  # Still blocked by default rule
+
+    def test_blocks_protected_file_from_config(self, hook_path, temp_project_dir):
+        """Protected files from config block Write operations."""
+        config = {
+            "version": 1,
+            "compliance_rules": {"bash": [], "write": []},
+            "protected_files": [
+                {
+                    "id": "env-file",
+                    "pattern": r"(^|/)\.env$",
+                    "reason": "Environment file protected",
+                    "enabled": True,
+                }
+            ],
+        }
+        config_path = Path(temp_project_dir) / ".nova-tracer" / "pre-tool-rules.json"
+        config_path.write_text(json.dumps(config))
+
+        hook_input = {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": "/app/.env",
+                "content": "SECRET=test",
+            },
+        }
+
+        env = os.environ.copy()
+        env["CLAUDE_PROJECT_DIR"] = temp_project_dir
+
+        result = subprocess.run(
+            [sys.executable, str(hook_path)],
+            input=json.dumps(hook_input),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        assert result.returncode == 2  # Blocked
+        output = json.loads(result.stdout)
+        assert output["decision"] == "block"
+        assert "Environment file protected" in output["reason"]
+
+    def test_allows_protected_file_when_disabled(self, hook_path, temp_project_dir):
+        """Protected files are allowed when protection is disabled."""
+        config = {
+            "version": 1,
+            "compliance_rules": {"bash": [], "write": []},
+            "protected_files": [
+                {
+                    "id": "env-file",
+                    "pattern": r"(^|/)\.env$",
+                    "reason": "Environment file protected",
+                    "enabled": False,
+                }
+            ],
+        }
+        config_path = Path(temp_project_dir) / ".nova-tracer" / "pre-tool-rules.json"
+        config_path.write_text(json.dumps(config))
+
+        hook_input = {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": "/app/.env",
+                "content": "PUBLIC_VAR=test",
+            },
+        }
+
+        env = os.environ.copy()
+        env["CLAUDE_PROJECT_DIR"] = temp_project_dir
+
+        result = subprocess.run(
+            [sys.executable, str(hook_path)],
+            input=json.dumps(hook_input),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        assert result.returncode == 0  # Allowed
 
 
 # ============================================================================

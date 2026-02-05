@@ -36,6 +36,13 @@
       },
       "additionalProperties": false
     },
+    "protected_files": {
+      "type": "array",
+      "description": "Additional protected file patterns (extends built-in protections)",
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    },
     "disable_default_rules": {
       "type": "array",
       "description": "List of default rule reasons to disable (for testing only)",

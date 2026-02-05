@@ -37,5 +37,25 @@
       }
     ]
   },
+  "protected_files": [
+    {
+      "id": "env-file",
+      "pattern": "(^|/)\\.env$",
+      "reason": "Environment file protected",
+      "enabled": false
+    },
+    {
+      "id": "env-local",
+      "pattern": "(^|/)\\.env\\.local$",
+      "reason": "Local environment file protected",
+      "enabled": false
+    },
+    {
+      "id": "ssh-directory",
+      "pattern": "(^|/)\\.ssh/",
+      "reason": "SSH directory protected",
+      "enabled": false
+    }
+  ],
   "disable_default_rules": []
 }
